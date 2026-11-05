@@ -40,6 +40,7 @@ _TweetRef = Annotated[str, Field(min_length=1, max_length=2_048)]
 _Username = Annotated[str, Field(min_length=1, max_length=50)]
 _Query = Annotated[str, Field(min_length=1, max_length=1_024)]
 _Limit = Annotated[int, Field(ge=1, le=100)]
+_BookmarkLimit = Annotated[int, Field(ge=1, le=500)]
 
 
 def _guard(
@@ -284,5 +285,21 @@ async def search(
     res = await gather(api.search(query, limit=limit, kv={"product": product}))
     if not res:
         return "No results."
+    # twscrape can yield a full page beyond limit; enforce the tool's output cap.
+    return joined(res[:limit])
+
+
+@mcp.tool(annotations=_READ_ONLY_EXTERNAL)
+@_guard
+async def bookmarks(limit: _BookmarkLimit = 50) -> str:
+    """Read the signed-in account's own X bookmarks as markdown.
+
+    Most recently bookmarked first, as X lists them. Only the bookmarks of the
+    account in the local session are reachable; other users' bookmarks are private.
+    """
+    api = get_api()
+    res = await gather(api.bookmarks(limit=limit))
+    if not res:
+        return "No bookmarks found (or the session cannot read them)."
     # twscrape can yield a full page beyond limit; enforce the tool's output cap.
     return joined(res[:limit])
