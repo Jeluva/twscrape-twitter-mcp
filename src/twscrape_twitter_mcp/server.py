@@ -303,3 +303,66 @@ async def bookmarks(limit: _BookmarkLimit = 50) -> str:
         return "No bookmarks found (or the session cannot read them)."
     # twscrape can yield a full page beyond limit; enforce the tool's output cap.
     return joined(res[:limit])
+
+
+async def _session_user_id() -> int:
+    """User id of the signed-in account: the pool username is its handle."""
+    api = get_api()
+    for acc in await api.pool.get_all():
+        if acc.active:
+            user = await api.user_by_login(acc.username)
+            if user:
+                return user.id
+    raise ValueError("no active account in the pool")
+
+
+@mcp.tool(annotations=_READ_ONLY_EXTERNAL)
+@_guard
+async def following(
+    limit: _BookmarkLimit = 200,
+    username: str | None = None,
+) -> str:
+    """List who an account follows, as markdown (handle, name, bio, followers).
+
+    Defaults to the signed-in account; pass `username` to list another public account.
+    """
+    api = get_api()
+    if username:
+        user = await api.user_by_login(_normalize_handle(username))
+        if not user:
+            return "User not found or not accessible."
+        uid = user.id
+    else:
+        uid = await _session_user_id()
+    res = await gather(api.following(uid, limit=limit))
+    if not res:
+        return "No followed accounts found (or the session cannot read them)."
+    return "\n\n---\n\n".join(user_to_md(u) for u in res[:limit])
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "openWorldHint": True})
+@_guard
+async def unfollow(username: _Username) -> str:
+    """Stop following one account (by handle) from the signed-in X account.
+
+    Acts on the real account. Call once per handle the user explicitly approved,
+    a few at a time: mass unfollowing can get the session rate-limited or flagged.
+    """
+    from twscrape.queue_client import QueueClient
+
+    api = get_api()
+    handle = _normalize_handle(username)
+    user = await api.user_by_login(handle)
+    if not user:
+        return f"@{handle} not found."
+    async with QueueClient(api.pool, "friendships_destroy") as client:
+        rep = await client.req(
+            "POST",
+            "https://x.com/i/api/1.1/friendships/destroy.json",
+            params={"user_id": str(user.id)},
+        )
+    if rep is None:
+        return "No account available to perform the request."
+    if rep.status_code == 200:
+        return f"Unfollowed @{user.username}."
+    return f"X answered {rep.status_code} for @{user.username}: {rep.text[:200]}"
