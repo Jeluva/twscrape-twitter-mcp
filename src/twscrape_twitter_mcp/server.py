@@ -310,6 +310,9 @@ async def _session_user_id() -> int:
     api = get_api()
     for acc in await api.pool.get_all():
         if acc.active:
+            if acc.username.startswith("uid_") and acc.username[4:].isdigit():
+                # `login --attach` names the pool account after the user id, not the handle.
+                return int(acc.username[4:])
             user = await api.user_by_login(acc.username)
             if user:
                 return user.id
